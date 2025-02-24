@@ -35,6 +35,8 @@ get_mla_metadata(
 
     auto dprops = at::cuda::getCurrentDeviceProperties();
     int sm_count = dprops->multiProcessorCount;
+		// num_heads_k, cutlass::ceil_div(num_heads_per_head_k, block_size_m), 这两部分是固定需要发射的occupancy.
+		// 剩余的sm, 需要在batch, splits维度上均衡分配.
     int num_sm_parts = sm_count / num_heads_k / cutlass::ceil_div(num_heads_per_head_k, block_size_m);
 
     auto tile_scheduler_metadata = torch::empty({num_sm_parts, TileSchedulerMetaDataSize}, options);

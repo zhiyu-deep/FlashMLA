@@ -574,6 +574,13 @@ flash_fwd_splitkv_mla_combine_kernel(__grid_constant__ const Flash_fwd_mla_param
 
 template<typename Kernel_traits, typename SharedStorage>
 void run_flash_splitkv_fwd_mla(Flash_fwd_mla_params &params, cudaStream_t stream) {
+	{
+		using T = bfloat16_t;
+		using Kernel_traits_ = Flash_fwd_kernel_traits_mla<576, 64, 64, 8, T, 512>;
+
+		constexpr unsigned kBlockN = Kernel_traits_::kBlockN;
+		FLASH_ASSERT(params.page_block_size == Kernel_traits::kBlockN);  // 64?
+	}
     FLASH_ASSERT(params.page_block_size == Kernel_traits::kBlockN);
     const int num_m_block = cute::ceil_div(params.seqlen_q, Kernel_traits::kBlockM);
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
@@ -609,13 +616,14 @@ get_mla_metadata_kernel(__grid_constant__ const Mla_metadata_params params) {
     int *seqlens_k_ptr = params.seqlens_k_ptr;
     int *tile_scheduler_metadata_ptr = params.tile_scheduler_metadata_ptr;
     int *num_splits_ptr = params.num_splits_ptr;
+
     int batch_size = params.batch_size;
     int block_size_n = params.block_size_n;
     int fixed_overhead_num_blocks = params.fixed_overhead_num_blocks;
     int num_sm_parts = params.num_sm_parts;
 
-    __shared__ int num_blocks_shared[MaxBatchSize];
-    __shared__ int num_splits_shared[MaxBatchSize];
+    __shared__ int num_blocks_shared[MaxBatchSize];  // 统计每个batch的block个数.
+    __shared__ int num_splits_shared[MaxBatchSize];  // 统计每个batch最后split个数.
 
     int total_num_blocks = 0;
     for (int i = threadIdx.x; i < batch_size; i += 32) {
@@ -631,14 +639,18 @@ get_mla_metadata_kernel(__grid_constant__ const Mla_metadata_params params) {
     if (threadIdx.x == 0) {
         int payload = cutlass::ceil_div(total_num_blocks, num_sm_parts) + fixed_overhead_num_blocks;
 
-        int now_idx = 0, now_block = 0, now_n_split_idx = 0, cum_num_splits = 0;
+        int now_idx = 0,  // 遍历过程中, 当前batch idx.
+				now_block = 0,    // 遍历过程中, 当前batch block idx.
+				now_n_split_idx = 0,  // 遍历过程中, 当前batch split idx.
+				cum_num_splits = 0;   // [batch + 1], accum的形式. 遍历过程中, 到当前batch累计split数.
         num_splits_shared[0] = 0;
         for (int i = 0; i < num_sm_parts; ++i) {
             int tile_scheduler_metadata0[4], tile_scheduler_metadata1;
             tile_scheduler_metadata0[0] = now_idx;
             tile_scheduler_metadata0[1] = now_block * block_size_n;
             tile_scheduler_metadata1 = now_n_split_idx;
-            int remain_payload = payload;
+
+            int remain_payload = payload;  // 代表当前sm还能处理的block个数.
             while (now_idx < batch_size) {
                 int num_blocks = num_blocks_shared[now_idx];
                 int now_remain_blocks = num_blocks - now_block;

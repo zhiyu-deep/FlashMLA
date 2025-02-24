@@ -38,19 +38,23 @@ def cal_diff(x: torch.Tensor, y: torch.Tensor, name: str) -> None:
 
 @torch.inference_mode()
 def test_flash_mla(b, s_q, mean_sk, h_q, h_kv, d, dv, causal, varlen):
+    # s_q: q length
+    # mean_sk: mean k length
     print(f"{b=}, {s_q=}, {mean_sk=}, {h_q=}, {h_kv=}, {d=}, {dv=}, {causal=}, {varlen=}")
 
     cache_seqlens = torch.full((b,), mean_sk, dtype=torch.int32)
     if varlen:
         for i in range(b):
+            # >= s_q, 否则没法mask.
             cache_seqlens[i] = max(random.normalvariate(mean_sk, mean_sk / 2), s_q)
+
     total_seqlens = cache_seqlens.sum().item()
     mean_seqlens = cache_seqlens.float().mean().int().item()
     max_seqlen = cache_seqlens.max().item()
     max_seqlen_pad = triton.cdiv(max_seqlen, 256) * 256
-    # print(f"{total_seqlens=}, {mean_seqlens=}, {max_seqlen=}")
 
     q = torch.randn(b, s_q, h_q, d)
+
     block_size = 64
     block_table = torch.arange(b * max_seqlen_pad // block_size, dtype=torch.int32).view(b, max_seqlen_pad // block_size)
     blocked_k = torch.randn(block_table.numel(), block_size, h_kv, d)
